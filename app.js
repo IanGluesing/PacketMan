@@ -201,6 +201,31 @@ function processLine(line) {
 
 out.on("line", processLine);
 
+let shuttingDown = false;
+
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.error(`${signal} received, stopping xtables-monitor...`);
+
+  child.kill("SIGTERM");   // ask it to exit
+  io.close();              // disconnect browsers
+  server.close(() => process.exit(0));
+
+  // Fallback if something hangs
+  setTimeout(() => {
+    child.kill("SIGKILL");
+    process.exit(0);
+  }, 2000).unref();
+}
+
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(sig, () => shutdown(sig));
+}
+
+// Last resort for normal exits and crashes
+process.on("exit", () => child.kill());
+
 // ---------------------------------------------------------------------------
 // Web
 // ---------------------------------------------------------------------------

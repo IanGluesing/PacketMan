@@ -1,0 +1,26 @@
+
+name: packet-tracer
+arch: arm64
+platform: linux
+version: 1.0.0
+maintainer: Your Name
+description: Linux packet tracing and visualization
+license: MIT
+
+depends:
+  - nodejs
+
+contents:
+  - src: ./app.js
+    dst: /usr/lib/packet-tracer/app.js
+  - src: ./index.html
+    dst: /usr/lib/packet-tracer/index.html
+
+  - src: ./node_modules/
+    dst: /usr/lib/packet-tracer/node_modules/
+    type: tree
+
+  - src: ./scripts/packet-tracer
+    dst: /usr/bin/packet-tracer
+    file_info:
+      mode: 0755

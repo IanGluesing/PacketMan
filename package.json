@@ -1,4 +1,14 @@
 {
+  "name": "packet-tracer",
+  "version": "1.0.0",
+  "description": "Linux packet tracing and visualization",
+  "main": "app.js",
+  "bin": {
+    "packet-tracer": "scripts/packet-tracer"
+  },
+  "scripts": {
+    "start": "node app.js"
+  },
   "dependencies": {
     "express": "^5.3.0",
     "socket.io": "^4.8.4"
