@@ -2,8 +2,8 @@
 name: packet-tracer
 arch: arm64
 platform: linux
-version: 1.0.0
-maintainer: Your Name
+version: 0.1.0
+maintainer: Ian Gluesing
 description: Linux packet tracing and visualization
 license: MIT
 
