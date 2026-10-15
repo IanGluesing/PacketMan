@@ -1,5 +1,5 @@
 const express = require("express");
-const { spawn } = require("child_process");
+const { spawn, execFile } = require("child_process");
 const readline = require("readline");
 const http = require("http");
 const fs = require("fs");
@@ -9,6 +9,7 @@ const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
+const HOST = process.env.HOST || "0.0.0.0";
 const io = new Server(server);
 
 const PORT = 8000;
@@ -33,8 +34,30 @@ out.on("line", (line) => {
 });
 
 child.stderr.on("data", (data) => process.stderr.write(data));
-child.on("error", (err) => console.error("Could not start xtables-monitor:", err));
-child.on("exit", (code) => console.error(`xtables-monitor exited with code ${code}`));
+child.on("error", (err) =>
+  console.error("Could not start xtables-monitor:", err),
+);
+child.on("exit", (code) =>
+  console.error(`xtables-monitor exited with code ${code}`),
+);
+
+// Stop xtables-monitor when this script stops.
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.error(`${signal} received, stopping xtables-monitor...`);
+  child.kill("SIGTERM");
+  io.close();
+  server.close(() => process.exit(0));
+  setTimeout(() => {
+    child.kill("SIGKILL");
+    process.exit(0);
+  }, 2000).unref();
+}
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"])
+  process.on(sig, () => shutdown(sig));
+process.on("exit", () => child.kill());
 
 // ---------------------------------------------------------------------------
 // Network interfaces (dynamic)
@@ -65,11 +88,22 @@ setInterval(() => {
 // ---------------------------------------------------------------------------
 // Parsing
 // ---------------------------------------------------------------------------
-const VERDICTS = new Set(["ACCEPT", "DROP", "RETURN", "CONTINUE", "QUEUE", "STOLEN", "REPEAT"]);
-const HOP_RE = /^(raw|mangle|nat|filter|security):([^:\s]+):(policy|rule|return)(?::(\S*))?$/i;
+const VERDICTS = new Set([
+  "ACCEPT",
+  "DROP",
+  "RETURN",
+  "CONTINUE",
+  "QUEUE",
+  "STOLEN",
+  "REPEAT",
+]);
+const HOP_RE =
+  /^(raw|mangle|nat|filter|security):([^:\s]+):(policy|rule|return)(?::(\S*))?$/i;
 
 function parseLine(line) {
-  const match = line.trim().match(/^(PACKET|TRACE):\s+(\S+)\s+([0-9a-fA-F]+)(?:\s+(.*))?$/);
+  const match = line
+    .trim()
+    .match(/^(PACKET|TRACE):\s+(\S+)\s+([0-9a-fA-F]+)(?:\s+(.*))?$/);
   if (!match) return null;
   return {
     type: match[1],
@@ -177,7 +211,11 @@ function processLine(line) {
 
   const g = getGroup(parsed);
   if (g.lines.length < MAX_LINES_PER_PACKET) {
-    g.lines.push({ type: parsed.type, line: parsed.line, time: new Date().toLocaleTimeString() });
+    g.lines.push({
+      type: parsed.type,
+      line: parsed.line,
+      time: new Date().toLocaleTimeString(),
+    });
   }
 
   const info = parseInfo(parsed.rest);
@@ -201,30 +239,99 @@ function processLine(line) {
 
 out.on("line", processLine);
 
-let shuttingDown = false;
+// ---------------------------------------------------------------------------
+// Rules: read-only listing via `iptables -S` (run with an argument array, never a shell)
+// ---------------------------------------------------------------------------
+const TABLES = ["raw", "mangle", "nat", "filter", "security"];
+const FAMILIES = { ip: "iptables", ip6: "ip6tables" };
 
-function shutdown(signal) {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  console.error(`${signal} received, stopping xtables-monitor...`);
-
-  child.kill("SIGTERM");   // ask it to exit
-  io.close();              // disconnect browsers
-  server.close(() => process.exit(0));
-
-  // Fallback if something hangs
-  setTimeout(() => {
-    child.kill("SIGKILL");
-    process.exit(0);
-  }, 2000).unref();
+function ipt(family, args) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      FAMILIES[family],
+      ["-w", "5", ...args],
+      { timeout: 10000, maxBuffer: 8 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) return reject(new Error((stderr || err.message).trim()));
+        resolve(stdout);
+      },
+    );
+  });
 }
 
-for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-  process.on(sig, () => shutdown(sig));
+// Parse `iptables -S` output into [{name, builtin, policy, rules:[{num, spec}]}].
+function parseSave(text) {
+  const chains = new Map();
+  for (const line of text.split("\n")) {
+    const m = line.trim().match(/^-([PNA])\s+(\S+)(?:\s+(.*))?$/);
+    if (!m) continue;
+    const [, cmd, name, rest = ""] = m;
+    if (cmd === "P")
+      chains.set(name, { name, builtin: true, policy: rest.trim(), rules: [] });
+    else if (cmd === "N")
+      chains.set(name, { name, builtin: false, policy: null, rules: [] });
+    else if (chains.has(name)) {
+      const c = chains.get(name);
+      c.rules.push({ num: c.rules.length + 1, spec: rest });
+    }
+  }
+  return [...chains.values()];
 }
 
-// Last resort for normal exits and crashes
-process.on("exit", () => child.kill());
+async function getAllRules() {
+  const result = {};
+  for (const family of Object.keys(FAMILIES)) {
+    result[family] = {};
+    await Promise.all(
+      TABLES.map(async (table) => {
+        try {
+          result[family][table] = parseSave(
+            await ipt(family, ["-t", table, "-S"]),
+          );
+        } catch (e) {
+          result[family][table] = { error: e.message }; // e.g. table/module not available
+        }
+      }),
+    );
+  }
+  return result;
+}
+
+let rulesJson = "";
+let rulesCache = null;
+let refreshing = false;
+async function refreshRules(force) {
+  if (refreshing && !force) return;
+  refreshing = true;
+  try {
+    const rules = await getAllRules();
+    const json = JSON.stringify(rules);
+    rulesCache = rules;
+    if (force || json !== rulesJson) {
+      rulesJson = json;
+      io.emit("rules", rules);
+    }
+  } finally {
+    refreshing = false;
+  }
+}
+
+// Pick up changes made outside the GUI (only while someone is watching).
+setInterval(() => {
+  if (io.engine.clientsCount > 0)
+    refreshRules().catch((e) => console.error("rules refresh:", e.message));
+}, 5000);
+
+io.on("connection", (socket) => {
+  socket.emit("interfaces", getInterfaces());
+  socket.emit("history", history);
+  if (rulesCache) socket.emit("rules", rulesCache);
+  refreshRules(true).catch((e) => console.error("rules refresh:", e.message));
+
+  socket.on("rules-refresh", () => {
+    refreshRules(true).catch((e) => console.error("rules refresh:", e.message));
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Web
@@ -233,11 +340,6 @@ app.get("/", (_req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
-io.on("connection", (socket) => {
-  socket.emit("interfaces", getInterfaces());
-  socket.emit("history", history);
-});
-
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`iptables trace viewer listening on port ${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`iptables trace viewer listening on http://${HOST}:${PORT}`);
 });

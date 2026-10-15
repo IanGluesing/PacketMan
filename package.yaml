@@ -1,8 +1,8 @@
 
-name: packet-tracer
+name: packetman
 arch: arm64
 platform: linux
-version: 0.1.0
+version: 0.1.1
 maintainer: Ian Gluesing
 description: Linux packet tracing and visualization
 license: MIT
@@ -12,15 +12,15 @@ depends:
 
 contents:
   - src: ./app.js
-    dst: /usr/lib/packet-tracer/app.js
+    dst: /usr/lib/packetman/app.js
   - src: ./index.html
-    dst: /usr/lib/packet-tracer/index.html
+    dst: /usr/lib/packetman/index.html
 
   - src: ./node_modules/
-    dst: /usr/lib/packet-tracer/node_modules/
+    dst: /usr/lib/packetman/node_modules/
     type: tree
 
-  - src: ./scripts/packet-tracer
-    dst: /usr/bin/packet-tracer
+  - src: ./scripts/packetman
+    dst: /usr/bin/packetman
     file_info:
       mode: 0755

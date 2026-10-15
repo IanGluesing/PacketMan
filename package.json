@@ -1,10 +1,10 @@
 {
-  "name": "packet-tracer",
-  "version": "1.0.0",
+  "name": "packetman",
+  "version": "0.1.1",
   "description": "Linux packet tracing and visualization",
   "main": "app.js",
   "bin": {
-    "packet-tracer": "scripts/packet-tracer"
+    "packetman": "scripts/packetman"
   },
   "scripts": {
     "start": "node app.js"
