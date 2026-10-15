@@ -1,0 +1,68 @@
+services:
+  host-a:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: host-a
+    volumes:
+      - ../setup_scripts/setup_host_a.sh:/usr/local/bin/setup_host_a.sh
+    entrypoint: /bin/bash /usr/local/bin/setup_host_a.sh
+    command: sleep infinity
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    networks:
+      ar_net:
+        ipv4_address: 172.10.1.5
+
+  router:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: router
+    volumes:
+      - ../setup_scripts/setup_router.sh:/usr/local/bin/setup_router.sh
+    entrypoint: /bin/bash /usr/local/bin/setup_router.sh
+    command: packetman
+    ports:
+      - "8080:8000"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      net.ipv4.icmp_echo_ignore_all: "1"
+    networks:
+      ar_net:
+        ipv4_address: 172.10.1.10
+      rb_net:
+        ipv4_address: 172.10.2.10
+
+  host-b:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: host-b
+    volumes:
+      - ../setup_scripts/setup_host_b.sh:/usr/local/bin/setup_host_b.sh
+    entrypoint: /bin/bash /usr/local/bin/setup_host_b.sh
+    command: sleep infinity
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    networks:
+      rb_net:
+        ipv4_address: 172.10.2.15
+
+networks:
+  ar_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.10.1.0/24
+          gateway: 172.10.1.254
+  rb_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.10.2.0/24
+          gateway: 172.10.2.254
